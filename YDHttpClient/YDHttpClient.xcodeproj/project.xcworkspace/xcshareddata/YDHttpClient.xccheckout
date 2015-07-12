@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>IDESourceControlProjectFavoriteDictionaryKey</key>
+	<false/>
+	<key>IDESourceControlProjectIdentifier</key>
+	<string>C94DEEF7-B52B-44D9-8B26-6D1F4480E864</string>
+	<key>IDESourceControlProjectName</key>
+	<string>YDHttpClient</string>
+	<key>IDESourceControlProjectOriginsDictionary</key>
+	<dict>
+		<key>29F49C20AF7C71935869AA5A26F15366DE2B089D</key>
+		<string>115.29.12.157:ydhl/ydhl-ios-framework.git</string>
+	</dict>
+	<key>IDESourceControlProjectPath</key>
+	<string>YDHttpClient/YDHttpClient.xcodeproj</string>
+	<key>IDESourceControlProjectRelativeInstallPathDictionary</key>
+	<dict>
+		<key>29F49C20AF7C71935869AA5A26F15366DE2B089D</key>
+		<string>../../..</string>
+	</dict>
+	<key>IDESourceControlProjectURL</key>
+	<string>115.29.12.157:ydhl/ydhl-ios-framework.git</string>
+	<key>IDESourceControlProjectVersion</key>
+	<integer>111</integer>
+	<key>IDESourceControlProjectWCCIdentifier</key>
+	<string>29F49C20AF7C71935869AA5A26F15366DE2B089D</string>
+	<key>IDESourceControlProjectWCConfigurations</key>
+	<array>
+		<dict>
+			<key>IDESourceControlRepositoryExtensionIdentifierKey</key>
+			<string>public.vcs.git</string>
+			<key>IDESourceControlWCCIdentifierKey</key>
+			<string>29F49C20AF7C71935869AA5A26F15366DE2B089D</string>
+			<key>IDESourceControlWCCName</key>
+			<string>ydhl-ios-framework</string>
+		</dict>
+	</array>
+</dict>
+</plist>
