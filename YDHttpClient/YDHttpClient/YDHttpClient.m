@@ -17,6 +17,7 @@
     NSInteger mWhat;
     ApiFromat mApiFormat;
     NSArray *mFiles;
+    NSMutableDictionary *headers;
 }
 @end
 
@@ -26,12 +27,40 @@
     mFetchType = FetchTypeApi;
     mCacheType = CacheTypeIgnore;
     mApiFormat  = ApiFromatJSON;
+    headers = [[NSMutableDictionary alloc] init];
+    
     if(self){
         mIsDBOpened = [self initDb];
     }
     return self;
 }
+- (void)clearAllCache{
+    if ( ! mIsDBOpened) return;
+    
+    NSString *sql = @"";
+    
+    sql = @"delete from CACHES where 1=1";
+    sqlite3_stmt *stmt;
+    int result = sqlite3_prepare_v2(mDatabase, [sql UTF8String], -1, &stmt, nil) ;
+    if (result != SQLITE_OK) {
+        return;
+    }
+    
+    int rst = sqlite3_step(stmt);
+    if (rst != SQLITE_DONE)
+        NSLog(@"delete ALL CACHE Something is Wrong(%d)!", rst);
+    
+    sqlite3_finalize(stmt);
+    
+    return;
 
+}
+-(void)clearCookie{
+    [self removeCache:@"Set-Cookie"];
+}
+- (void)setHeader:(NSString *)header forName:(NSString *)name{
+    [headers setObject:header forKey:name];
+}
 - (id)initByFetch:(FetchType)fetchType andCache:(CacheType) cacheType {
     self = [super init];
     mFetchType = fetchType;
@@ -43,6 +72,30 @@
     return self;
 }
 
+
+-(void)saveCache:(NSString *)data For:(NSInteger )what delegate:(id<YDHttpClientDelegate>)deletage{
+    [self saveCacheForKey:[deletage getCacheKeyFor:what] withData:data];
+}
+
+-(NSString *)fetchCacheFor:(NSString *)key{
+    
+    NSDictionary *cache = [self getCacheByKey:key];
+    
+    if ([self cacheIsEmpty:cache]) {
+        return nil;
+    }
+    return [cache objectForKey:@"value"];
+}
+-(NSString *)fetchCacheFor:(NSInteger )what delegate:(id<YDHttpClientDelegate>)deletage{
+    mDelegate = deletage;
+    
+    NSDictionary *cache = [self getCacheByKey:[mDelegate getCacheKeyFor:what]];
+
+    if ([self cacheIsEmpty:cache]) {
+        return nil;
+    }
+    return [cache objectForKey:@"value"];
+}
 -(void)changeFetch:(FetchType)fetchType andCache:(CacheType) cacheType{
     mFetchType = fetchType;
     mCacheType = cacheType;
@@ -57,91 +110,110 @@
     mDelegate = dge;
     mWhat =w;
     
-    if (mFetchType==FetchTypeCache || mFetchType==FetchTypeCacheElseApi || mFetchType==FetchTypeCacheThenApi || mFetchType==FetchTypeCacheAwaysApi) {
-        
-        NSDictionary *cache = [self getCacheByKey:[mDelegate getCacheKeyFor:mWhat]];
-        
-        //这两种情况直接返回，不调用api
-        if (mFetchType==FetchTypeCache || (! [self cacheIsEmpty:cache] && mFetchType==FetchTypeCacheElseApi)){
-            [mDelegate handleResult:[cache objectForKey:@"value"] for:mWhat hasDone:YES];
-            return;
-        }
-        
-        if(mFetchType == FetchTypeCacheThenApi || (! [self cacheIsEmpty:cache] && mFetchType==FetchTypeCacheAwaysApi)){
-            [mDelegate handleResult:[cache objectForKey:@"value"] for:mWhat hasDone:mFetchType == FetchTypeCacheAwaysApi];
-        }
-    }
-    
-    
-
-    [self call:uri by:method withData:data completionHandler:^(NSURLResponse * res, NSData * resData, NSError * error) {
-        NSString *result = nil;
-        if ( ! error) {
-            result = [[NSString alloc] initWithData:resData encoding:NSUTF8StringEncoding];
-            if ([mDelegate isCallSuccess:result]) {
-                [self handleCacheForResult:result];
-            }
-        }else{//网络错误
-            NSLog(@"%@", [error description]);
-            if(mFetchType == FetchTypeApiElseCache){
-                NSDictionary *cache = [self getCacheByKey:[mDelegate getCacheKeyFor:mWhat]];
-                if(! [self cacheIsEmpty:cache]){
-                    result = [cache objectForKey:@"value"];
-                }
-            }
-        }
-        
-        if (mFetchType==FetchTypeCacheAwaysApi) {
-            NSDictionary *cache = [self getCacheByKey:[mDelegate getCacheKeyFor:mWhat]];
-            if (! [self cacheIsEmpty:cache]) {
+    @try {
+        if ([self isGet:method] && (mFetchType==FetchTypeCache || mFetchType==FetchTypeCacheElseApi || mFetchType==FetchTypeCacheThenApi || mFetchType==FetchTypeCacheAwaysApi)) {
+            
+            NSString *key = [mDelegate getCacheKeyFor:mWhat];
+            NSDictionary *cache = [self getCacheByKey:key];
+            
+            //这两种情况直接返回，不调用api
+            if (mFetchType==FetchTypeCache || (! [self cacheIsEmpty:cache] && mFetchType==FetchTypeCacheElseApi)){
+                NSLog(@"found cache for type: %d key: %@, ignore api invoke", mFetchType, key);
+                [mDelegate handleResult:[cache objectForKey:@"value"] for:mWhat hasDone:YES];
                 return;
             }
+            
+            if(mFetchType == FetchTypeCacheThenApi || (! [self cacheIsEmpty:cache] && mFetchType==FetchTypeCacheAwaysApi)){
+                NSLog(@"found cache for type: %d key: %@, will invoke api", mFetchType, key);
+                [mDelegate handleResult:[cache objectForKey:@"value"] for:mWhat hasDone:mFetchType == FetchTypeCacheAwaysApi];
+            }
         }
         
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if(error){
-                [mDelegate onNetworkError:mWhat error:[error description]];
-            }else{
-                [mDelegate handleResult:result for:mWhat hasDone:YES];
+        
+        NSLog(@"%@ invoke api: %@ with data:%@", method, uri, data);
+        [self call:uri by:method withData:data completionHandler:^(NSURLResponse * res, NSData * resData, NSError * error) {
+            NSString *result = nil;
+            NSHTTPURLResponse *HTTPResponse = (NSHTTPURLResponse *)res;
+            
+            
+            if ( ! error && resData.length>0 ) {//[HTTPResponse statusCode]==200 500也会返回内容的情况，这个时候不能看着网络错误；只要无错误并有数据返回就看着正常
+                result = [[NSString alloc] initWithData:resData encoding:NSUTF8StringEncoding];
+                NSDictionary *fields = [HTTPResponse allHeaderFields];
+                NSString *cookie = [fields valueForKey:@"Set-Cookie"];
+                if(cookie != nil)
+                    [self saveCacheForKey:@"Set-Cookie" withData:cookie];
+                
+                NSLog(@"invoke api success");
+                
+                if ([self isGet:method] && [mDelegate isCallSuccess:result]) {
+                     NSLog(@"is valid data for get invoke, handle cache now");
+                    [self handleCacheForResult:result];
+                }
+            }else{//网络错误
+                NSLog(@"%@ \r\n arg:\r\n%@ response:\r\n%@ \r\nerror:\r\n%@ \r\nresult:\r\n%@", HTTPResponse, data, [[NSString alloc] initWithData:resData encoding:NSUTF8StringEncoding], [error description], result);
+                if([self isGet:method] && mFetchType == FetchTypeApiElseCache){
+                    NSDictionary *cache = [self getCacheByKey:[mDelegate getCacheKeyFor:mWhat]];
+                    if(! [self cacheIsEmpty:cache]){
+                        result = [cache objectForKey:@"value"];
+                    }
+                }
             }
-        });
+            
+            if ([self isGet:method] && mFetchType==FetchTypeCacheAwaysApi) {
+                NSDictionary *cache = [self getCacheByKey:[mDelegate getCacheKeyFor:mWhat]];
+                if (! [self cacheIsEmpty:cache]) {
+                    return;
+                }
+            }
+            
+            //非get请求时，网络错误的情况下，也把请求的数据交给handleCache处理
+            if (error && ! [self isGet:method]) {
+                [self handleCacheForResult:data];
+            }
+            
+            if (error==nil && result==nil){//两者都未nil，表示无网络错误，但api没有正确返回内容，如出现了500；
+                result = @"";
+            }
+            
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if(error ){//error不为nil，表示有网络错误；
+                    [mDelegate onNetworkError:mWhat error:error ? [error description] : @"Server Error"];
+                }
+                if(result != nil){//result表示有数据返回，但这时候可能也有网络错误（onNetworkError会被调用），这时进handleResult是因为缓存策略
+                    [mDelegate handleResult:result for:mWhat hasDone:YES];
+                }
+            });
+            
+            return;
+            
+        }];
+    } @catch (NSException *exception) {
+        NSLog(@"NSException: %@", exception);
+    } @finally {
         
-        return;
-        
-    }];
-
+    }
 }
 
 #pragma mark - 网络请求私有方法
 
--(void)handleCacheForResult:(NSString *)result{
+-(void)handleCacheForResult:(id)result{
     NSString *key = [mDelegate getCacheKeyFor:mWhat];
     if (key==nil) {
         return;
     }
     switch (mCacheType) {
-        case CacheTypeAppend:{
+        case CacheTypeCustom:{
             
             NSDictionary *cache = [self getCacheByKey:key];
             if ( ! [self cacheIsEmpty:cache]) {
-                [self saveCacheForKey:key withData:[mDelegate appendResultFrom:result To:[cache objectForKey:@"value"]]];
+                [self saveCacheForKey:key withData:[mDelegate handleCache:result ToCache:[cache objectForKey:@"value"] For:mWhat]];
             }else{
-                [self saveCacheForKey:key withData:result];
-            }
-            break;
-        }
-        case CacheTypePrepend:
-        {
-            NSDictionary *cache = [self getCacheByKey:key];
-            if (! [self cacheIsEmpty:cache]) {
-                [self saveCacheForKey:key withData:[mDelegate prependResultFrom:result To:[cache objectForKey:@"value"]]];
-            }else{
-                [self saveCacheForKey:key withData:result];
+                [self saveCacheForKey:key withData:[mDelegate handleCache:result ToCache:nil For:mWhat] ];
             }
             break;
         }
         case CacheTypeReplace:
-            [self saveCacheForKey:key withData:result];
+            [self saveCacheForKey:key withData:! [result isKindOfClass:[NSString class]] ? [YDHttpClient stringFromJSON:result] : result];
             break;
         case CacheTypeIgnore:
         default:
@@ -179,6 +251,10 @@
     
     NSString *TWITTERFON_FORM_BOUNDARY = @"GZYDHLYDHttpClient2010";
     NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:uri]];
+
+    
+    [self setHeaders:request];
+        
     NSString *MPboundary=[[NSString alloc]initWithFormat:@"--%@",TWITTERFON_FORM_BOUNDARY];
     NSString *endMPboundary=[[NSString alloc]initWithFormat:@"%@--",MPboundary];
     
@@ -193,8 +269,11 @@
         }
         
         [body appendFormat:@"%@\r\n",MPboundary];
-        [body appendFormat:@"Content-Disposition: form-data; name=\"%@\"\r\n\r\n",[self urlencodeForString:key]];
-        [body appendFormat:@"%@\r\n", [self urlencodeForString:[postParems objectForKey:key]]];
+//        [body appendFormat:@"Content-Disposition: form-data; name=\"%@\"\r\n\r\n",[self urlencodeForString:key]];
+        [body appendFormat:@"Content-Disposition: form-data; name=\"%@\"\r\n\r\n",key];
+        id v = [postParems objectForKey:key];
+//        [body appendFormat:@"%@\r\n", [v isKindOfClass:[NSString class]] ? [self urlencodeForString:v] : v];
+        [body appendFormat:@"%@\r\n", v];
         
     }
     
@@ -227,11 +306,11 @@
     
     NSString *content=[[NSString alloc]initWithFormat:@"multipart/form-data; boundary=%@",TWITTERFON_FORM_BOUNDARY];
     [request setValue:content forHTTPHeaderField:@"Content-Type"];
-    [request setValue:[NSString stringWithFormat:@"%ld", [myRequestData length]] forHTTPHeaderField:@"Content-Length"];
+    [request setValue:[NSString stringWithFormat:@"%d", [myRequestData length]] forHTTPHeaderField:@"Content-Length"];
     [request setHTTPBody:myRequestData];
     [request setHTTPMethod:@"POST"];
     
-    
+    NSLog(@"%@", [[NSString alloc] initWithData:myRequestData encoding:NSUTF8StringEncoding]);
     
     NSOperationQueue *queue = [[NSOperationQueue alloc] init];
     [queue setName:@"YDHttpClientPostFile"];
@@ -239,6 +318,7 @@
     [NSURLConnection sendAsynchronousRequest:request queue:queue completionHandler:handler];
     
 }
+
 
 - (void)call:(NSString *)uri by: (NSString *)httpMethod withData:(NSDictionary *)httpData  completionHandler:(void (^)(NSURLResponse*, NSData*, NSError*)) handler{
     NSString *data = [self urlencode:httpData];
@@ -271,6 +351,7 @@
     
     NSOperationQueue *queue = [[NSOperationQueue alloc] init];
     [queue setName:@"YDHttpClient"];
+    [self setHeaders:request];
     
     [NSURLConnection sendAsynchronousRequest:request queue:queue completionHandler:handler];
 }
@@ -301,8 +382,37 @@
     if([[cache objectForKey:@"id"] intValue]==0)return YES;
     return NO;
 }
+-(void)removeCache:(NSString *)key{
+    if ( ! mIsDBOpened) return;
+    
+    NSString *sql = @"";
+    
+    sql = @"delete from CACHES where name=?";
+    sqlite3_stmt *stmt;
+    int result = sqlite3_prepare_v2(mDatabase, [sql UTF8String], -1, &stmt, nil) ;
+    if (result != SQLITE_OK) {
+        return;
+    }
+    
+    
+    sqlite3_bind_text(stmt, 1, [key UTF8String], -1, NULL);
+    int rst = sqlite3_step(stmt);
+    if (rst != SQLITE_DONE)
+        NSLog(@"delete CACHE Something is Wrong(%d)!", rst);
+    
+    sqlite3_finalize(stmt);
+    
+    return;
+
+}
 -(void)saveCacheForKey:(NSString *)key withData:(NSString *)data{
     if ( ! mIsDBOpened) return;
+    
+    if (data == nil) {
+        [self removeCache:key];
+        return;
+    }
+    
     NSDictionary *cache = [self getCacheByKey:key];
     
     NSString *sql = @"";
@@ -382,6 +492,10 @@
 }
 
 #pragma mark - 助手方法
+-(BOOL)isGet:(NSString *)method{
+    return [@"get" caseInsensitiveCompare:method]==NSOrderedSame;
+}
+
 /**
  * @brief json 格式字符串解析成json格式
  */
@@ -410,6 +524,21 @@
         return [[NSString alloc] initWithData:jsonData  encoding:NSUTF8StringEncoding];
     }else{
         return nil;
+    }
+}
+
+
+- (void)setHeaders:(NSMutableURLRequest *)request {
+    NSDictionary *cookie = [self getCacheByKey:@"Set-Cookie"];
+    if( ! [self cacheIsEmpty:cookie]){
+        NSString *cookieStr = [cookie objectForKey:@"value"];
+        NSRange  range = [cookieStr rangeOfString:@";"];
+        [request addValue:@"keep-alive" forHTTPHeaderField:@"Connection"];
+        [request addValue:[cookieStr substringToIndex: range.location] forHTTPHeaderField:@"Cookie"];
+    }
+    [request addValue:@"yes" forHTTPHeaderField:@"X-YDHTTP-CLIENT"];
+    for (NSString *header in [headers allKeys]) {
+        [request addValue:[headers objectForKey:header] forHTTPHeaderField:header];
     }
 }
 @end
